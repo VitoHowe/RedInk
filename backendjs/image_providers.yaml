@@ -1,0 +1,18 @@
+providers:
+  api.67:
+    api_key: sk-eT5QiHrpyaqpKsqmENt98rSORgPpXCbUqTPWz8anLuiJyQoG
+    base_url: https://api.67.si
+    endpoint_type: /v1/chat/completions
+    high_concurrency: false
+    model: Nano-Banana-Pro
+    short_prompt: true
+    type: image_api
+  default:
+    api_key: sk-476939672
+    type: image_api
+    model: sora-image
+    high_concurrency: false
+    short_prompt: true
+    endpoint_type: /v1/chat/completions
+    base_url: http://178.128.190.43:8998
+active_provider: api.67

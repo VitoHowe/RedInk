@@ -1,0 +1,7 @@
+providers:
+  default:
+    base_url: https://ai.hybgzs.com
+    endpoint_type: /v1/chat/completions
+    model: gemini-2.5-pro
+    type: openai_compatible
+active_provider: default
