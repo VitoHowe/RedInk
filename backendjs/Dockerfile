@@ -6,8 +6,8 @@ WORKDIR /app
 # 复制 package 文件
 COPY package*.json ./
 
-# 安装依赖
-RUN npm ci
+# 安装依赖 (使用 npm install 避免 Alpine 上的 npm ci 问题)
+RUN npm install --frozen-lockfile && npm cache clean --force
 
 # 复制源代码
 COPY . .
@@ -24,7 +24,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # 只安装生产依赖
-RUN npm ci --only=production
+RUN npm install --production --frozen-lockfile && npm cache clean --force
 
 # 从构建阶段复制编译后的代码
 COPY --from=builder /app/dist ./dist
