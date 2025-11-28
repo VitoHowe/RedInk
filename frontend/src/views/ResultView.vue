@@ -143,6 +143,7 @@ const handleRegenerate = async (image: any) => {
     const pageContent = store.outline.pages.find(p => p.index === image.index)
     if (!pageContent) {
        alert('无法找到对应页面的内容')
+       regeneratingIndex.value = null
        return
     }
 
@@ -152,17 +153,40 @@ const handleRegenerate = async (image: any) => {
       userTopic: store.topic || ''
     }
 
-    const result = await regenerateImage(store.taskId, pageContent, true, context)
-    if (result.success && result.image_url) {
-       const newUrl = result.image_url
-       store.updateImage(image.index, newUrl)
-    } else {
-       alert('重绘失败: ' + (result.error || '未知错误'))
-    }
+    // 使用流式 API
+    await regenerateImage(
+      store.taskId,
+      pageContent,
+      true,
+      context,
+      // onProgress
+      () => {},
+      // onComplete
+      (event) => {
+        if (event.image_url) {
+          store.updateImage(image.index, event.image_url)
+        }
+      },
+      // onError
+      (event) => {
+        alert('重绘失败: ' + (event.message || '未知错误'))
+      },
+      // onFinish
+      (result) => {
+        regeneratingIndex.value = null
+        if (!result.success && result.error) {
+          alert('重绘失败: ' + result.error)
+        }
+      },
+      // onStreamError
+      (err) => {
+        regeneratingIndex.value = null
+        alert('重绘失败: ' + err.message)
+      }
+    )
   } catch (e: any) {
-    alert('重绘失败: ' + e.message)
-  } finally {
     regeneratingIndex.value = null
+    alert('重绘失败: ' + e.message)
   }
 }
 </script>

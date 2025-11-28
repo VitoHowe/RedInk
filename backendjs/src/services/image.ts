@@ -32,6 +32,7 @@ export interface ImageProgressEvent {
     failed?: number;
     failed_indices?: number[];
     retryable?: boolean;
+    error?: string;
   };
 }
 
@@ -617,6 +618,124 @@ export class ImageService {
         index,
         error: error || '未知错误',
         retryable: true
+      };
+    }
+  }
+
+  /**
+   * 重试生成单张图片（流式，支持 SSE）
+   */
+  async *retrySingleImageStreaming(
+    taskId: string,
+    page: PageData,
+    useReference: boolean = true,
+    fullOutline?: string,
+    userTopic?: string
+  ): AsyncGenerator<ImageProgressEvent> {
+    logger.info(`流式重试单张图片: task_id=${taskId}, page=${page.index}`);
+
+    this.currentTaskDir = path.join(this.historyRootDir, taskId);
+    if (!fs.existsSync(this.currentTaskDir)) {
+      fs.mkdirSync(this.currentTaskDir, { recursive: true });
+    }
+
+    let referenceImage: Buffer | undefined;
+    let userImages: Buffer[] | undefined;
+
+    // 尝试从任务状态中获取上下文
+    const taskState = this.taskStates.get(taskId);
+    if (taskState) {
+      if (useReference) {
+        referenceImage = taskState.cover_image || undefined;
+      }
+      if (!fullOutline) {
+        fullOutline = taskState.full_outline;
+      }
+      if (!userTopic) {
+        userTopic = taskState.user_topic;
+      }
+      userImages = taskState.user_images || undefined;
+    }
+
+    // 如果任务状态中没有封面图，尝试从文件系统加载
+    if (useReference && !referenceImage) {
+      const coverPath = path.join(this.currentTaskDir, '0.png');
+      if (fs.existsSync(coverPath)) {
+        const coverData = fs.readFileSync(coverPath);
+        referenceImage = await compressImage(coverData, 200);
+      }
+    }
+
+    // 发送开始事件
+    yield {
+      event: 'progress',
+      data: {
+        index: page.index,
+        status: 'generating',
+        message: `正在重新生成图片 [${page.index}]...`
+      }
+    };
+
+    // 生成图片
+    const [index, success, filename, error] = await this._generateSingleImage(
+      page,
+      taskId,
+      referenceImage,
+      0,
+      fullOutline || '',
+      userImages,
+      userTopic || ''
+    );
+
+    if (success && filename) {
+      if (taskState) {
+        taskState.generated[index] = filename;
+        delete taskState.failed[index];
+      }
+
+      // 发送完成事件
+      yield {
+        event: 'complete',
+        data: {
+          index,
+          status: 'done',
+          image_url: `/api/images/${taskId}/${filename}`
+        }
+      };
+
+      // 发送结束事件
+      yield {
+        event: 'finish',
+        data: {
+          success: true,
+          index,
+          image_url: `/api/images/${taskId}/${filename}`
+        }
+      };
+    } else {
+      if (taskState) {
+        taskState.failed[index] = error || '未知错误';
+      }
+
+      // 发送错误事件
+      yield {
+        event: 'error',
+        data: {
+          index,
+          status: 'error',
+          message: error || '未知错误',
+          retryable: true
+        }
+      };
+
+      // 发送结束事件
+      yield {
+        event: 'finish',
+        data: {
+          success: false,
+          index,
+          error: error || '未知错误'
+        }
       };
     }
   }

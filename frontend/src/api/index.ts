@@ -120,38 +120,172 @@ export function getImageUrlAuto(urlOrPath: string): string {
   return `${API_BASE_URL}/images/${urlOrPath}`
 }
 
-// 重试单张图片
+// 重试单张图片 - SSE 流式响应
 export async function retrySingleImage(
   taskId: string,
   page: Page,
-  useReference: boolean = true
-): Promise<{ success: boolean; index: number; image_url?: string; error?: string }> {
-  const response = await axios.post(`${API_BASE_URL}/retry`, {
-    task_id: taskId,
-    page,
-    use_reference: useReference
-  })
-  return response.data
+  useReference: boolean = true,
+  onProgress: (event: ProgressEvent) => void,
+  onComplete: (event: ProgressEvent) => void,
+  onError: (event: ProgressEvent) => void,
+  onFinish: (result: { success: boolean; index: number; image_url?: string; error?: string }) => void,
+  onStreamError: (error: Error) => void
+): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/retry`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        task_id: taskId,
+        page,
+        use_reference: useReference
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('无法读取响应流')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (!line.trim()) continue
+
+        const [eventLine, dataLine] = line.split('\n')
+        if (!eventLine || !dataLine) continue
+
+        const eventType = eventLine.replace('event: ', '').trim()
+        const eventData = dataLine.replace('data: ', '').trim()
+
+        try {
+          const data = JSON.parse(eventData)
+
+          switch (eventType) {
+            case 'progress':
+              onProgress(data)
+              break
+            case 'complete':
+              onComplete(data)
+              break
+            case 'error':
+              onError(data)
+              break
+            case 'finish':
+              onFinish(data)
+              break
+          }
+        } catch (e) {
+          console.error('解析 SSE 数据失败:', e)
+        }
+      }
+    }
+  } catch (error) {
+    onStreamError(error as Error)
+  }
 }
 
-// 重新生成图片（即使成功的也可以重新生成）
+// 重新生成图片（即使成功的也可以重新生成）- SSE 流式响应
 export async function regenerateImage(
   taskId: string,
   page: Page,
   useReference: boolean = true,
-  context?: {
+  context: {
     fullOutline?: string
     userTopic?: string
+  },
+  onProgress: (event: ProgressEvent) => void,
+  onComplete: (event: ProgressEvent) => void,
+  onError: (event: ProgressEvent) => void,
+  onFinish: (result: { success: boolean; index: number; image_url?: string; error?: string }) => void,
+  onStreamError: (error: Error) => void
+): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/regenerate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        task_id: taskId,
+        page,
+        use_reference: useReference,
+        full_outline: context?.fullOutline,
+        user_topic: context?.userTopic
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('无法读取响应流')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (!line.trim()) continue
+
+        const [eventLine, dataLine] = line.split('\n')
+        if (!eventLine || !dataLine) continue
+
+        const eventType = eventLine.replace('event: ', '').trim()
+        const eventData = dataLine.replace('data: ', '').trim()
+
+        try {
+          const data = JSON.parse(eventData)
+
+          switch (eventType) {
+            case 'progress':
+              onProgress(data)
+              break
+            case 'complete':
+              onComplete(data)
+              break
+            case 'error':
+              onError(data)
+              break
+            case 'finish':
+              onFinish(data)
+              break
+          }
+        } catch (e) {
+          console.error('解析 SSE 数据失败:', e)
+        }
+      }
+    }
+  } catch (error) {
+    onStreamError(error as Error)
   }
-): Promise<{ success: boolean; index: number; image_url?: string; error?: string }> {
-  const response = await axios.post(`${API_BASE_URL}/regenerate`, {
-    task_id: taskId,
-    page,
-    use_reference: useReference,
-    full_outline: context?.fullOutline,
-    user_topic: context?.userTopic
-  })
-  return response.data
 }
 
 // 批量重试失败的图片（SSE）

@@ -128,7 +128,7 @@ const getStatusText = (status: string) => {
   return texts[status] || '等待中'
 }
 
-// 重试单张图片（异步并发执行，不阻塞）
+// 重试单张图片（流式响应，异步执行）
 function retrySingleImage(index: number) {
   if (!store.taskId) return
 
@@ -144,18 +144,35 @@ function retrySingleImage(index: number) {
     userTopic: store.topic || ''
   }
 
-  // 异步执行重绘，不阻塞
-  apiRegenerateImage(store.taskId, page, true, context)
-    .then(result => {
-      if (result.success && result.image_url) {
-        store.updateImage(index, result.image_url)
-      } else {
+  // 使用流式 API
+  apiRegenerateImage(
+    store.taskId,
+    page,
+    true,
+    context,
+    // onProgress
+    () => {},
+    // onComplete
+    (event) => {
+      if (event.image_url) {
+        store.updateImage(index, event.image_url)
+      }
+    },
+    // onError
+    (event) => {
+      store.updateProgress(index, 'error', undefined, event.message)
+    },
+    // onFinish
+    (result) => {
+      if (!result.success && result.error) {
         store.updateProgress(index, 'error', undefined, result.error)
       }
-    })
-    .catch(e => {
-      store.updateProgress(index, 'error', undefined, String(e))
-    })
+    },
+    // onStreamError
+    (err) => {
+      store.updateProgress(index, 'error', undefined, err.message)
+    }
+  )
 }
 
 // 重新生成图片（成功的也可以重新生成，立即返回不等待）

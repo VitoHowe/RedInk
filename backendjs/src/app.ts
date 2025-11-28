@@ -52,8 +52,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // ==================== 静态文件服务 ====================
 
 // 提供 history 目录的静态文件访问(图片等)
+// 注意：使用 /static/history 避免与 /api/history API路由冲突
 const historyDir = path.join(process.cwd(), 'history');
-app.use('/history', express.static(historyDir, {
+app.use('/static/history', express.static(historyDir, {
   maxAge: '1h', // 缓存1小时
   etag: true
 }));

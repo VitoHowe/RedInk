@@ -251,7 +251,7 @@ router.get('/images/:taskId/:filename', (req: Request, res: Response) => {
 });
 
 /**
- * 重试生成单张图片
+ * 重试生成单张图片 - SSE 流式响应
  */
 router.post('/retry', async (req: Request, res: Response) => {
   try {
@@ -272,22 +272,40 @@ router.post('/retry', async (req: Request, res: Response) => {
 
     logger.info(`🔄 重试生成图片: task=${taskId}, page=${page.index}`);
     const imageService = getImageService();
-    const result = await imageService.retrySingleImage(taskId, page, useReference);
 
-    if (result.success) {
-      logger.info(`✅ 图片重试成功: ${result.image_url}`);
-    } else {
-      logger.error(`❌ 图片重试失败: ${result.error}`);
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Connection', 'keep-alive');
+
+    // SSE 生成器
+    const generator = imageService.retrySingleImageStreaming(
+      taskId,
+      page,
+      useReference
+    );
+
+    for await (const event of generator) {
+      const eventType = event.event;
+      const eventData = event.data;
+
+      // 格式化为 SSE 格式
+      res.write(`event: ${eventType}\n`);
+      res.write(`data: ${JSON.stringify(eventData)}\n\n`);
     }
 
-    return res.status(result.success ? 200 : 500).json(result);
+    res.end();
 
   } catch (error: any) {
     logError('/retry', error);
-    return res.status(500).json({
-      success: false,
-      error: `重试图片生成失败。\n错误详情: ${error.message}`
-    });
+    // SSE已经开始，不能返回JSON
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        error: `重试图片生成失败。\n错误详情: ${error.message}`
+      });
+    }
   }
 });
 
@@ -346,7 +364,7 @@ router.post('/retry-failed', async (req: Request, res: Response) => {
 });
 
 /**
- * 重新生成图片（即使成功的也可以重新生成）
+ * 重新生成图片（即使成功的也可以重新生成）- SSE 流式响应
  */
 router.post('/regenerate', async (req: Request, res: Response) => {
   try {
@@ -369,7 +387,15 @@ router.post('/regenerate', async (req: Request, res: Response) => {
 
     logger.info(`🔄 重新生成图片: task=${taskId}, page=${page.index}`);
     const imageService = getImageService();
-    const result = await imageService.retrySingleImage(
+
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Connection', 'keep-alive');
+
+    // SSE 生成器
+    const generator = imageService.retrySingleImageStreaming(
       taskId,
       page,
       useReference,
@@ -377,20 +403,26 @@ router.post('/regenerate', async (req: Request, res: Response) => {
       userTopic
     );
 
-    if (result.success) {
-      logger.info(`✅ 图片重新生成成功: ${result.image_url}`);
-    } else {
-      logger.error(`❌ 图片重新生成失败: ${result.error}`);
+    for await (const event of generator) {
+      const eventType = event.event;
+      const eventData = event.data;
+
+      // 格式化为 SSE 格式
+      res.write(`event: ${eventType}\n`);
+      res.write(`data: ${JSON.stringify(eventData)}\n\n`);
     }
 
-    return res.status(result.success ? 200 : 500).json(result);
+    res.end();
 
   } catch (error: any) {
     logError('/regenerate', error);
-    return res.status(500).json({
-      success: false,
-      error: `重新生成图片失败。\n错误详情: ${error.message}`
-    });
+    // SSE已经开始，不能返回JSON
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        error: `重新生成图片失败。\n错误详情: ${error.message}`
+      });
+    }
   }
 });
 
@@ -654,20 +686,18 @@ router.get('/history/search', (req: Request, res: Response) => {
  */
 router.get('/history/stats', (req: Request, res: Response) => {
   try {
-    const { taskId } = req.params;
     const historyService = getHistoryService();
-    const result = historyService.scanAndSyncTaskImages(taskId);
+    const stats = historyService.getStatistics();
 
-    if (!result.success) {
-      return res.status(404).json(result);
-    }
-
-    return res.status(200).json(result);
+    return res.json({
+      success: true,
+      ...stats
+    });
 
   } catch (error: any) {
     return res.status(500).json({
       success: false,
-      error: `扫描任务失败。\n错误详情: ${error.message}`
+      error: `获取历史记录统计失败。\n错误详情: ${error.message}`
     });
   }
 });

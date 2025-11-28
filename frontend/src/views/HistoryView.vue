@@ -430,7 +430,7 @@ const changePage = (p: number) => {
   loadData()
 }
 
-// 重新生成历史记录中的图片
+// 重新生成历史记录中的图片（流式响应）
 async function regenerateHistoryImage(index: number) {
   if (!viewingRecord.value || !viewingRecord.value.images.task_id) {
     alert('无法重新生成：缺少任务信息')
@@ -449,36 +449,57 @@ async function regenerateHistoryImage(index: number) {
       userTopic: viewingRecord.value.title || ''
     }
 
-    const result = await apiRegenerateImage(
+    // 使用流式 API
+    await apiRegenerateImage(
       viewingRecord.value.images.task_id,
       page,
       true,
-      context
-    )
+      context,
+      // onProgress
+      () => {},
+      // onComplete
+      async (event) => {
+        if (event.image_url) {
+          const filename = event.image_url.split('/').pop()
+          if (filename && viewingRecord.value) {
+            viewingRecord.value.images.generated[index] = filename
 
-    if (result.success && result.image_url) {
-      const filename = result.image_url.split('/').pop()
-      viewingRecord.value.images.generated[index] = filename
+            // 刷新图片显示
+            const timestamp = Date.now()
+            const imgElements = document.querySelectorAll(`img[src*="${viewingRecord.value.images.task_id}/${filename}"]`)
+            imgElements.forEach(img => {
+              const baseUrl = (img as HTMLImageElement).src.split('?')[0]
+              ;(img as HTMLImageElement).src = `${baseUrl}?t=${timestamp}`
+            })
 
-      const timestamp = Date.now()
-      const imgElements = document.querySelectorAll(`img[src*="${viewingRecord.value.images.task_id}/${filename}"]`)
-      imgElements.forEach(img => {
-        const baseUrl = (img as HTMLImageElement).src.split('?')[0]
-        ;(img as HTMLImageElement).src = `${baseUrl}?t=${timestamp}`
-      })
-
-      await updateHistory(viewingRecord.value.id, {
-        images: {
-          task_id: viewingRecord.value.images.task_id,
-          generated: viewingRecord.value.images.generated
+            // 更新历史记录
+            await updateHistory(viewingRecord.value.id, {
+              images: {
+                task_id: viewingRecord.value.images.task_id,
+                generated: viewingRecord.value.images.generated
+              }
+            })
+          }
         }
-      })
-
-      regeneratingImages.value.delete(index)
-    } else {
-      regeneratingImages.value.delete(index)
-      alert('重新生成失败: ' + (result.error || '未知错误'))
-    }
+      },
+      // onError
+      (event) => {
+        regeneratingImages.value.delete(index)
+        alert('重新生成失败: ' + (event.message || '未知错误'))
+      },
+      // onFinish
+      (result) => {
+        regeneratingImages.value.delete(index)
+        if (!result.success && result.error) {
+          alert('重新生成失败: ' + result.error)
+        }
+      },
+      // onStreamError
+      (err) => {
+        regeneratingImages.value.delete(index)
+        alert('重新生成失败: ' + err.message)
+      }
+    )
   } catch (e) {
     regeneratingImages.value.delete(index)
     alert('重新生成失败: ' + String(e))
