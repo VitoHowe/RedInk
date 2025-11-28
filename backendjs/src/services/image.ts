@@ -251,7 +251,8 @@ export class ImageService {
     taskId?: string,
     fullOutline: string = '',
     userImages?: Buffer[],
-    userTopic: string = ''
+    userTopic: string = '',
+    recordId?: string | null
   ): AsyncGenerator<ImageProgressEvent> {
     if (!taskId) {
       taskId = `task_${uuidv4().slice(0, 8)}`;
@@ -289,6 +290,9 @@ export class ImageService {
       user_images: compressedUserImages,
       user_topic: userTopic
     });
+
+    // 引入历史服务用于实时更新
+    const historyService = recordId ? (await import('./history')).getHistoryService() : null;
 
     // ==================== 第一阶段：生成封面 ====================
     let coverPage: PageData | null = null;
@@ -342,6 +346,22 @@ export class ImageService {
         coverImageData = fs.readFileSync(coverPath);
         coverImageData = await compressImage(coverImageData, 200);
         this.taskStates.get(taskId)!.cover_image = coverImageData;
+
+        // 实时更新历史记录:第一张图片生成后更新 thumbnail
+        if (historyService && recordId) {
+          try {
+            historyService.updateRecord(recordId, {
+              thumbnail: filename,
+              images: {
+                task_id: taskId,
+                generated: [filename]
+              }
+            });
+            logger.debug(`✅ 已更新封面缩略图: thumbnail=${filename}`);
+          } catch (error: any) {
+            logger.error(`更新缩略图失败: ${error.message}`);
+          }
+        }
 
         yield {
           event: 'complete',
@@ -426,6 +446,21 @@ export class ImageService {
               generatedImages.push(filename);
               this.taskStates.get(taskId)!.generated[index] = filename;
 
+              // 实时更新历史记录:每次生成成功后更新 generated 数组
+              if (historyService && recordId) {
+                try {
+                  historyService.updateRecord(recordId, {
+                    images: {
+                      task_id: taskId,
+                      generated: [...generatedImages]
+                    }
+                  });
+                  logger.debug(`✅ 已更新生成列表: count=${generatedImages.length}`);
+                } catch (error: any) {
+                  logger.error(`更新生成列表失败: ${error.message}`);
+                }
+              }
+
               yield {
                 event: 'complete',
                 data: {
@@ -506,6 +541,21 @@ export class ImageService {
             generatedImages.push(filename);
             this.taskStates.get(taskId)!.generated[index] = filename;
 
+            // 实时更新历史记录:每次生成成功后更新 generated 数组
+            if (historyService && recordId) {
+              try {
+                historyService.updateRecord(recordId, {
+                  images: {
+                    task_id: taskId,
+                    generated: [...generatedImages]
+                  }
+                });
+                logger.debug(`✅ 已更新生成列表: count=${generatedImages.length}`);
+              } catch (error: any) {
+                logger.error(`更新生成列表失败: ${error.message}`);
+              }
+            }
+
             yield {
               event: 'complete',
               data: {
@@ -535,6 +585,31 @@ export class ImageService {
     }
 
     // ==================== 完成 ====================
+    // 最终更新历史记录状态
+    if (historyService && recordId) {
+      try {
+        let status: 'completed' | 'partial' | 'draft';
+        if (failedPages.length === 0) {
+          status = 'completed';
+        } else if (generatedImages.length > 0) {
+          status = 'partial';
+        } else {
+          status = 'draft';
+        }
+
+        historyService.updateRecord(recordId, {
+          status,
+          images: {
+            task_id: taskId,
+            generated: generatedImages
+          }
+        });
+        logger.info(`✅ 已更新最终状态: status=${status}, generated=${generatedImages.length}`);
+      } catch (error: any) {
+        logger.error(`更新最终状态失败: ${error.message}`);
+      }
+    }
+
     yield {
       event: 'finish',
       data: {
@@ -630,7 +705,8 @@ export class ImageService {
     page: PageData,
     useReference: boolean = true,
     fullOutline?: string,
-    userTopic?: string
+    userTopic?: string,
+    recordId?: string | null
   ): AsyncGenerator<ImageProgressEvent> {
     logger.info(`流式重试单张图片: task_id=${taskId}, page=${page.index}`);
 
@@ -691,6 +767,36 @@ export class ImageService {
       if (taskState) {
         taskState.generated[index] = filename;
         delete taskState.failed[index];
+      }
+
+      // 实时更新历史记录
+      if (recordId) {
+        try {
+          const historyService = (await import('./history')).getHistoryService();
+          const record = historyService.getRecord(recordId);
+          if (record) {
+            const updatedGenerated = [...(record.images?.generated || [])];
+            // 更新或添加当前图片
+            const filenameOnly = filename;
+            if (!updatedGenerated.includes(filenameOnly)) {
+              updatedGenerated.push(filenameOnly);
+            } else {
+              // 替换已存在的
+              const idx = updatedGenerated.indexOf(filenameOnly);
+              updatedGenerated[idx] = filenameOnly;
+            }
+            
+            historyService.updateRecord(recordId, {
+              images: {
+                task_id: taskId,
+                generated: updatedGenerated
+              }
+            });
+            logger.debug(`✅ 已更新重试图片: filename=${filename}`);
+          }
+        } catch (error: any) {
+          logger.error(`更新重试图片失败: ${error.message}`);
+        }
       }
 
       // 发送完成事件

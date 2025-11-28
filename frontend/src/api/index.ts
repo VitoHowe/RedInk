@@ -496,7 +496,8 @@ export async function generateImagesPost(
   onFinish: (event: FinishEvent) => void,
   onStreamError: (error: Error) => void,
   userImages?: File[],
-  userTopic?: string
+  userTopic?: string,
+  recordId?: string
 ) {
   try {
     // 将用户图片转换为 base64
@@ -522,6 +523,7 @@ export async function generateImagesPost(
       body: JSON.stringify({
         pages,
         task_id: taskId,
+        record_id: recordId,
         full_outline: fullOutline,
         user_images: userImagesBase64.length > 0 ? userImagesBase64 : undefined,
         user_topic: userTopic || ''

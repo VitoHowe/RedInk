@@ -162,6 +162,38 @@ router.post('/generate', async (req: Request, res: Response) => {
       });
     }
 
+    // 查找对应的历史记录并更新 task_id
+    let recordId: string | null = null;
+    if (taskId) {
+      try {
+        const historyService = getHistoryService();
+        const index = historyService['_loadIndex']();
+        
+        // 查找包含此 task_id 的记录
+        for (const rec of index.records) {
+          const recordDetail = historyService.getRecord(rec.id);
+          if (recordDetail && recordDetail.images?.task_id === taskId) {
+            recordId = rec.id;
+            break;
+          }
+        }
+
+        // 如果找到了记录,更新其 task_id 和状态
+        if (recordId) {
+          historyService.updateRecord(recordId, {
+            images: {
+              task_id: taskId,
+              generated: []
+            },
+            status: 'generating'
+          });
+          logger.info(`✅ 已关联历史记录: record_id=${recordId}, task_id=${taskId}`);
+        }
+      } catch (error: any) {
+        logger.error(`查找/更新历史记录失败: ${error.message}`);
+      }
+    }
+
     // 获取图片生成服务
     logger.info(`🖼️  开始图片生成任务: ${taskId}, 共 ${pages.length} 页`);
     const imageService = getImageService();
@@ -172,13 +204,14 @@ router.post('/generate', async (req: Request, res: Response) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Connection', 'keep-alive');
 
-    // SSE 生成器
+    // SSE 生成器,传入 recordId 用于实时更新历史记录
     const generator = imageService.generateImages(
       pages,
       taskId,
       fullOutline,
       userImages,
-      userTopic
+      userTopic,
+      recordId // 传递 recordId 给 ImageService
     );
 
     for await (const event of generator) {
@@ -270,6 +303,25 @@ router.post('/retry', async (req: Request, res: Response) => {
       });
     }
 
+    // 查找对应的历史记录
+    let recordId: string | null = null;
+    if (taskId) {
+      try {
+        const historyService = getHistoryService();
+        const index = historyService['_loadIndex']();
+        
+        for (const rec of index.records) {
+          const recordDetail = historyService.getRecord(rec.id);
+          if (recordDetail && recordDetail.images?.task_id === taskId) {
+            recordId = rec.id;
+            break;
+          }
+        }
+      } catch (error: any) {
+        logger.error(`查找历史记录失败: ${error.message}`);
+      }
+    }
+
     logger.info(`🔄 重试生成图片: task=${taskId}, page=${page.index}`);
     const imageService = getImageService();
 
@@ -279,11 +331,14 @@ router.post('/retry', async (req: Request, res: Response) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Connection', 'keep-alive');
 
-    // SSE 生成器
+    // SSE 生成器,传入 recordId
     const generator = imageService.retrySingleImageStreaming(
       taskId,
       page,
-      useReference
+      useReference,
+      undefined,
+      undefined,
+      recordId
     );
 
     for await (const event of generator) {
@@ -385,6 +440,25 @@ router.post('/regenerate', async (req: Request, res: Response) => {
       });
     }
 
+    // 查找对应的历史记录
+    let recordId: string | null = null;
+    if (taskId) {
+      try {
+        const historyService = getHistoryService();
+        const index = historyService['_loadIndex']();
+        
+        for (const rec of index.records) {
+          const recordDetail = historyService.getRecord(rec.id);
+          if (recordDetail && recordDetail.images?.task_id === taskId) {
+            recordId = rec.id;
+            break;
+          }
+        }
+      } catch (error: any) {
+        logger.error(`查找历史记录失败: ${error.message}`);
+      }
+    }
+
     logger.info(`🔄 重新生成图片: task=${taskId}, page=${page.index}`);
     const imageService = getImageService();
 
@@ -394,13 +468,14 @@ router.post('/regenerate', async (req: Request, res: Response) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Connection', 'keep-alive');
 
-    // SSE 生成器
+    // SSE 生成器,传入 recordId
     const generator = imageService.retrySingleImageStreaming(
       taskId,
       page,
       useReference,
       fullOutline,
-      userTopic
+      userTopic,
+      recordId
     );
 
     for await (const event of generator) {
@@ -533,6 +608,80 @@ router.get('/history', (req: Request, res: Response) => {
 });
 
 /**
+ * 搜索历史记录
+ */
+router.get('/history/search', (req: Request, res: Response) => {
+  try {
+    const keyword = req.query.keyword as string || '';
+
+    if (!keyword) {
+      return res.status(400).json({
+        success: false,
+        error: '参数错误：keyword 不能为空。\n请提供搜索关键词。'
+      });
+    }
+
+    const historyService = getHistoryService();
+    const results = historyService.searchRecords(keyword);
+
+    return res.status(200).json({
+      success: true,
+      records: results
+    });
+
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: `搜索历史记录失败。\n错误详情: ${error.message}`
+    });
+  }
+});
+
+/**
+ * 获取历史记录统计
+ */
+router.get('/history/stats', (req: Request, res: Response) => {
+  try {
+    const historyService = getHistoryService();
+    const stats = historyService.getStatistics();
+
+    return res.json({
+      success: true,
+      ...stats
+    });
+
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: `获取历史记录统计失败。\n错误详情: ${error.message}`
+    });
+  }
+});
+
+/**
+ * 扫描单个任务并同步图片列表
+ */
+router.get('/history/scan/:taskId', (req: Request, res: Response) => {
+  try {
+    const { taskId } = req.params;
+    const historyService = getHistoryService();
+    const result = historyService.scanAndSyncTaskImages(taskId);
+
+    if (!result.success) {
+      return res.status(404).json(result);
+    }
+
+    return res.status(200).json(result);
+
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: `扫描任务失败。\n错误详情: ${error.message}`
+    });
+  }
+});
+
+/**
  * 获取历史记录详情
  */
 router.get('/history/:recordId', (req: Request, res: Response) => {
@@ -624,80 +773,6 @@ router.delete('/history/:recordId', (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: `删除历史记录失败。\n错误详情: ${error.message}`
-    });
-  }
-});
-
-/**
- * 扫描单个任务并同步图片列表
- */
-router.get('/history/scan/:taskId', (req: Request, res: Response) => {
-  try {
-    const { taskId } = req.params;
-    const historyService = getHistoryService();
-    const result = historyService.scanAndSyncTaskImages(taskId);
-
-    if (!result.success) {
-      return res.status(404).json(result);
-    }
-
-    return res.status(200).json(result);
-
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: `扫描任务失败。\n错误详情: ${error.message}`
-    });
-  }
-});
-
-/**
- * 搜索历史记录
- */
-router.get('/history/search', (req: Request, res: Response) => {
-  try {
-    const keyword = req.query.keyword as string || '';
-
-    if (!keyword) {
-      return res.status(400).json({
-        success: false,
-        error: '参数错误：keyword 不能为空。\n请提供搜索关键词。'
-      });
-    }
-
-    const historyService = getHistoryService();
-    const results = historyService.searchRecords(keyword);
-
-    return res.status(200).json({
-      success: true,
-      records: results
-    });
-
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: `搜索历史记录失败。\n错误详情: ${error.message}`
-    });
-  }
-});
-
-/**
- * 获取历史记录统计
- */
-router.get('/history/stats', (req: Request, res: Response) => {
-  try {
-    const historyService = getHistoryService();
-    const stats = historyService.getStatistics();
-
-    return res.json({
-      success: true,
-      ...stats
-    });
-
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: `获取历史记录统计失败。\n错误详情: ${error.message}`
     });
   }
 });

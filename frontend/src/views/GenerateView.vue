@@ -276,7 +276,8 @@ onMounted(async () => {
       console.log('Finish:', event)
       store.finishGeneration(event.task_id)
 
-      // 更新历史记录
+      // 注意: 后端现在会在 SSE 完成后自动更新历史记录
+      // 前端保留这段代码作为备用,以防后端更新失败
       if (store.recordId) {
         try {
           // 收集所有生成的图片文件名
@@ -299,7 +300,7 @@ onMounted(async () => {
             status: status,
             thumbnail: thumbnail
           })
-          console.log('历史记录已更新')
+          console.log('历史记录已更新(前端)')
         } catch (e) {
           console.error('更新历史记录失败:', e)
         }
@@ -320,7 +321,9 @@ onMounted(async () => {
     // userImages - 用户上传的参考图片
     store.userImages.length > 0 ? store.userImages : undefined,
     // userTopic - 用户原始输入
-    store.topic
+    store.topic,
+    // recordId - 历史记录ID,传递给后端用于自动更新
+    store.recordId
   )
 })
 </script>
