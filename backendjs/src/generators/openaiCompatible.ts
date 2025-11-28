@@ -186,13 +186,33 @@ export class OpenAICompatibleGenerator extends ImageGeneratorBase {
       });
 
       let buffer = '';
+      let chunkCount = 0;
+      const MAX_CHUNKS = 200; // 最大接收次数限制
       
       return new Promise((resolve, reject) => {
         response.data.on('data', (chunk: Buffer) => {
+          chunkCount++;
+          
+          // 超时检查：超过最大接收次数
+          if (chunkCount > MAX_CHUNKS) {
+            logger.error(`流式响应超时：已接收${chunkCount}次数据块，超过限制${MAX_CHUNKS}`);
+            response.data.removeAllListeners('data');
+            response.data.removeAllListeners('end');
+            response.data.removeAllListeners('error');
+            reject(new Error(
+              `流式响应超时：接收次数超过${MAX_CHUNKS}次限制\n` +
+              '可能原因：\n' +
+              '1. API响应异常缓慢\n' +
+              '2. 模型生成内容过长\n' +
+              '3. 网络连接不稳定'
+            ));
+            return;
+          }
+          
           const chunkStr = chunk.toString();
           buffer += chunkStr;
           
-          logger.debug(`收到数据块 (${chunkStr.length}字符), buffer累积: ${buffer.length}字符`);
+          logger.debug(`收到数据块 #${chunkCount} (${chunkStr.length}字符), buffer累积: ${buffer.length}字符`);
           
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';

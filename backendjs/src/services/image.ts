@@ -622,6 +622,118 @@ export class ImageService {
   }
 
   /**
+   * 批量重试失败的图片（生成器，支持 SSE 流式返回）
+   */
+  async *retryFailedImages(
+    taskId: string,
+    pages: PageData[]
+  ): AsyncGenerator<ImageProgressEvent> {
+    logger.info(`批量重试失败图片: task_id=${taskId}, pages=${pages.length}`);
+
+    this.currentTaskDir = path.join(this.historyRootDir, taskId);
+    if (!fs.existsSync(this.currentTaskDir)) {
+      fs.mkdirSync(this.currentTaskDir, { recursive: true });
+    }
+
+    // 获取任务状态
+    const taskState = this.taskStates.get(taskId);
+    if (!taskState) {
+      logger.warn(`任务 ${taskId} 状态不存在，使用默认值`);
+    }
+
+    let referenceImage: Buffer | undefined;
+    let userImages: Buffer[] | undefined;
+    const fullOutline = taskState?.full_outline || '';
+    const userTopic = taskState?.user_topic || '';
+
+    // 尝试加载封面作为参考图
+    if (taskState?.cover_image) {
+      referenceImage = taskState.cover_image;
+    } else {
+      const coverPath = path.join(this.currentTaskDir, '0.png');
+      if (fs.existsSync(coverPath)) {
+        const coverData = fs.readFileSync(coverPath);
+        referenceImage = await compressImage(coverData, 200);
+      }
+    }
+
+    if (taskState?.user_images) {
+      userImages = taskState.user_images;
+    }
+
+    let successCount = 0;
+    let failedCount = 0;
+
+    // 依次重试每个失败的图片
+    for (const page of pages) {
+      yield {
+        event: 'retry_start',
+        data: {
+          index: page.index,
+          status: 'retrying',
+          message: `重新生成失败的图片 [${page.index}]...`,
+          current: successCount,
+          total: pages.length
+        }
+      };
+
+      const [index, success, filename, error] = await this._generateSingleImage(
+        page,
+        taskId,
+        referenceImage,
+        0,
+        fullOutline,
+        userImages,
+        userTopic
+      );
+
+      if (success && filename) {
+        successCount++;
+        if (taskState) {
+          taskState.generated[index] = filename;
+          delete taskState.failed[index];
+        }
+
+        yield {
+          event: 'retry_finish',
+          data: {
+            index,
+            status: 'done',
+            image_url: `/api/images/${taskId}/${filename}`,
+            success: true
+          }
+        };
+      } else {
+        failedCount++;
+        if (taskState) {
+          taskState.failed[index] = error || '未知错误';
+        }
+
+        yield {
+          event: 'error',
+          data: {
+            index,
+            status: 'error',
+            message: error || '未知错误',
+            retryable: true
+          }
+        };
+      }
+    }
+
+    // 发送完成信号
+    yield {
+      event: 'finish',
+      data: {
+        success: failedCount === 0,
+        task_id: taskId,
+        completed: successCount,
+        failed: failedCount
+      }
+    };
+  }
+
+  /**
    * 获取图片完整路径
    */
   getImagePath(taskId: string, filename: string): string {

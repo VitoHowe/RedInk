@@ -1,13 +1,61 @@
 services:
-  redink:
-    image: histonemax/redink:latest
-    container_name: redink
+  # 后端服务
+  backend:
+    build:
+      context: ./backendjs
+      dockerfile: Dockerfile
+    container_name: redink-backend
     ports:
       - "12398:12398"
+    environment:
+      - NODE_ENV=production
+      - PORT=12398
+      - HOST=0.0.0.0
+      - CORS_ORIGINS=http://localhost:12399,http://localhost:5173,http://localhost:3000
+      - OUTPUT_DIR=output
+      - LOG_LEVEL=info
     volumes:
       # 持久化输出目录
       - ./output:/app/output
-      # 可选：挂载自定义配置文件
-      # - ./text_providers.yaml:/app/text_providers.yaml
-      # - ./image_providers.yaml:/app/image_providers.yaml
+      # 持久化历史记录
+      - ./history:/app/history
+      # 挂载自定义配置文件
+      - ./text_providers.yaml:/app/text_providers.yaml
+      - ./image_providers.yaml:/app/image_providers.yaml
+    networks:
+      - redink-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:12398/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: redink-frontend
+    ports:
+      - "12399:12399"
+    depends_on:
+      - backend
+    networks:
+      - redink-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:12399"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# 自定义网络
+networks:
+  redink-network:
+    driver: bridge
+
+# 卷定义(可选)
+volumes:
+  output:
+  history:

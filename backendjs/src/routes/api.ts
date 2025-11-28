@@ -7,6 +7,7 @@ import { Request, Response, Router } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import axios from 'axios';
 import { logger } from '../utils/logger';
 import { getOutlineService } from '../services/outline';
 import { getImageService, resetImageService } from '../services/image';
@@ -291,6 +292,60 @@ router.post('/retry', async (req: Request, res: Response) => {
 });
 
 /**
+ * 批量重试失败的图片（SSE 流式返回）
+ */
+router.post('/retry-failed', async (req: Request, res: Response) => {
+  try {
+    const data = req.body;
+    const taskId = data.task_id;
+    const pages = data.pages;
+
+    logRequest('/retry-failed', { task_id: taskId, pages_count: pages?.length || 0 });
+
+    if (!taskId || !pages) {
+      logger.warn('批量重试请求缺少必要参数');
+      return res.status(400).json({
+        success: false,
+        error: '参数错误：task_id 和 pages 不能为空。\n请提供任务ID和要重试的页面列表。'
+      });
+    }
+
+    logger.info(`🔄 批量重试失败图片: task=${taskId}, 共 ${pages.length} 页`);
+    const imageService = getImageService();
+
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Connection', 'keep-alive');
+
+    // SSE 生成器
+    const generator = imageService.retryFailedImages(taskId, pages);
+
+    for await (const event of generator) {
+      const eventType = event.event;
+      const eventData = event.data;
+
+      // 格式化为 SSE 格式
+      res.write(`event: ${eventType}\n`);
+      res.write(`data: ${JSON.stringify(eventData)}\n\n`);
+    }
+
+    res.end();
+
+  } catch (error: any) {
+    logError('/retry-failed', error);
+    // SSE已经开始，不能返回JSON
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        error: `批量重试失败。\n错误详情: ${error.message}`
+      });
+    }
+  }
+});
+
+/**
  * 重新生成图片（即使成功的也可以重新生成）
  */
 router.post('/regenerate', async (req: Request, res: Response) => {
@@ -542,6 +597,29 @@ router.delete('/history/:recordId', (req: Request, res: Response) => {
 });
 
 /**
+ * 扫描单个任务并同步图片列表
+ */
+router.get('/history/scan/:taskId', (req: Request, res: Response) => {
+  try {
+    const { taskId } = req.params;
+    const historyService = getHistoryService();
+    const result = historyService.scanAndSyncTaskImages(taskId);
+
+    if (!result.success) {
+      return res.status(404).json(result);
+    }
+
+    return res.status(200).json(result);
+
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: `扫描任务失败。\n错误详情: ${error.message}`
+    });
+  }
+});
+
+/**
  * 搜索历史记录
  */
 router.get('/history/search', (req: Request, res: Response) => {
@@ -575,27 +653,6 @@ router.get('/history/search', (req: Request, res: Response) => {
  * 获取历史记录统计
  */
 router.get('/history/stats', (req: Request, res: Response) => {
-  try {
-    const historyService = getHistoryService();
-    const stats = historyService.getStatistics();
-
-    return res.status(200).json({
-      success: true,
-      ...stats
-    });
-
-  } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: `获取历史记录统计失败。\n错误详情: ${error.message}`
-    });
-  }
-});
-
-/**
- * 扫描单个任务并同步图片列表
- */
-router.get('/history/scan/:taskId', (req: Request, res: Response) => {
   try {
     const { taskId } = req.params;
     const historyService = getHistoryService();
@@ -921,6 +978,153 @@ router.post('/config', (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       error: `更新配置失败: ${error.message}`
+    });
+  }
+});
+
+/**
+ * 测试服务商连接
+ */
+router.post('/config/test', async (req: Request, res: Response) => {
+  try {
+    const data = req.body;
+    const providerType = data.type;
+    const providerName = data.provider_name;
+    const testConfig = {
+      api_key: data.api_key,
+      base_url: data.base_url,
+      model: data.model
+    };
+
+    // 如果没有提供 api_key，从配置文件读取
+    if (!testConfig.api_key && providerName) {
+      let configPath: string;
+      
+      if (providerType === 'google_genai' || providerType === 'image_api') {
+        configPath = path.join(process.cwd(), 'image_providers.yaml');
+      } else {
+        configPath = path.join(process.cwd(), 'text_providers.yaml');
+      }
+
+      if (fs.existsSync(configPath)) {
+        const content = fs.readFileSync(configPath, 'utf-8');
+        const yamlConfig = yaml.load(content) as any;
+        const providers = yamlConfig?.providers || {};
+        
+        if (providerName in providers) {
+          testConfig.api_key = providers[providerName].api_key;
+          if (!testConfig.base_url) {
+            testConfig.base_url = providers[providerName].base_url;
+          }
+          if (!testConfig.model) {
+            testConfig.model = providers[providerName].model;
+          }
+        }
+      }
+    }
+
+    if (!testConfig.api_key) {
+      return res.status(400).json({ success: false, error: 'API Key 未配置' });
+    }
+
+    const testPrompt = '请回复\'你好，红墨\'';
+
+    // 根据不同类型执行测试
+    if (providerType === 'google_genai') {
+      // 图片生成服务商：仅测试连接
+      return res.json({
+        success: true,
+        message: 'Google GenAI 无法直接测试连接。请在实际生成图片时验证配置是否正确。'
+      });
+
+    } else if (providerType === 'openai_compatible' || providerType === 'image_api') {
+      const baseUrl = (testConfig.base_url || 'https://api.openai.com').replace(/\/+$/, '').replace(/\/v1$/, '');
+
+      if (providerType === 'image_api') {
+        // 图片API：测试models端点
+        try {
+          const url = `${baseUrl}/v1/models`;
+          const response = await axios.get(url, {
+            headers: { 'Authorization': `Bearer ${testConfig.api_key}` },
+            timeout: 30000
+          });
+
+          if (response.status === 200) {
+            return res.json({
+              success: true,
+              message: '连接成功！仅代表连接稳定，不确定是否可以稳定支持图片生成'
+            });
+          } else {
+            throw new Error(`HTTP ${response.status}: ${JSON.stringify(response.data).substring(0, 200)}`);
+          }
+        } catch (error: any) {
+          return res.status(400).json({
+            success: false,
+            error: error.message || String(error)
+          });
+        }
+      } else {
+        // OpenAI兼容：实际调用文本生成测试
+        try {
+          const url = `${baseUrl}/v1/chat/completions`;
+          const payload = {
+            model: testConfig.model || 'gpt-3.5-turbo',
+            messages: [{ role: 'user', content: testPrompt }],
+            max_tokens: 50
+          };
+
+          const response = await axios.post(url, payload, {
+            headers: {
+              'Authorization': `Bearer ${testConfig.api_key}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 30000
+          });
+
+          if (response.status !== 200) {
+            throw new Error(`HTTP ${response.status}: ${JSON.stringify(response.data).substring(0, 200)}`);
+          }
+
+          const result = response.data;
+          const resultText = result.choices[0].message.content;
+
+          if (resultText.includes('你好') && resultText.includes('红墨')) {
+            return res.json({
+              success: true,
+              message: `连接成功！响应: ${resultText.substring(0, 100)}`
+            });
+          } else {
+            return res.json({
+              success: true,
+              message: `连接成功，但响应内容不符合预期: ${resultText.substring(0, 100)}`
+            });
+          }
+        } catch (error: any) {
+          return res.status(400).json({
+            success: false,
+            error: error.message || String(error)
+          });
+        }
+      }
+
+    } else if (providerType === 'google_gemini') {
+      // Google Gemini文本生成测试
+      return res.json({
+        success: true,
+        message: 'Google Gemini 无法直接测试连接。请在实际使用时验证配置是否正确。'
+      });
+
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: `不支持的类型: ${providerType}`
+      });
+    }
+
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      error: error.message || String(error)
     });
   }
 });
