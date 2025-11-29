@@ -1,5 +1,4 @@
-
-/**
+﻿/**
  * API 路由
  * 实现所有RESTful API端点
  */
@@ -91,111 +90,64 @@ router.post('/outline', upload.array('images'), async (req: Request, res: Respon
     }
 
     if (!topic) {
-      logger.warn('大纲生成请求缺少 topic 参数');
+      logger.warn('请求缺少 topic 参数');
       return res.status(400).json({
         success: false,
-        error: '参数错误：topic 不能为空。\n请提供要生成图文的主题内容。'
+        error: '参数错误：topic 不能为空'
       });
     }
 
-    // 调用大纲生成服务
-    logger.info(`🔄 开始生成大纲，主题: ${topic.slice(0, 50)}...`);
     const outlineService = getOutlineService();
     const result = await outlineService.generateOutline(topic, images);
 
-    const elapsed = (Date.now() - startTime) / 1000;
-    if (result.success) {
-      logger.info(`✅ 大纲生成成功，耗时 ${elapsed.toFixed(2)}s，共 ${result.pages?.length || 0} 页`);
-      return res.status(200).json(result);
-    } else {
-      logger.error(`❌ 大纲生成失败: ${result.error || '未知错误'}`);
-      return res.status(500).json(result);
-    }
+    const duration = Date.now() - startTime;
+    logger.info(`✅ 大纲生成成功，耗时: ${duration}ms`);
+
+    return res.json({
+      success: true,
+      ...result
+    });
 
   } catch (error: any) {
     logError('/outline', error);
     return res.status(500).json({
       success: false,
-      error: `大纲生成异常。\n错误详情: ${error.message}\n建议：检查后端日志获取更多信息`
+      error: `生成大纲失败。\n错误详情: ${error.message}`
     });
   }
 });
 
 /**
- * 生成图片（SSE 流式返回，支持用户上传参考图片）
+ * 生成图片 - SSE 流式响应
  */
 router.post('/generate', async (req: Request, res: Response) => {
   try {
     const data = req.body;
+    let taskId = data.task_id;
     const pages = data.pages;
-    const taskId = data.task_id;
-    const fullOutline = data.full_outline || '';
-    const userTopic = data.user_topic || '';
-    
-    // 支持 base64 格式的用户参考图片
-    const userImagesBase64 = data.user_images || [];
-    let userImages: Buffer[] | undefined;
-    
-    if (userImagesBase64.length > 0) {
-      userImages = [];
-      for (const imgB64 of userImagesBase64) {
-        let base64Data = imgB64;
-        if (imgB64.includes(',')) {
-          base64Data = imgB64.split(',')[1];
-        }
-        userImages.push(Buffer.from(base64Data, 'base64'));
-      }
-    }
+    const recordId = data.record_id; // 接收 record_id
 
-    logRequest('/generate', {
-      pages_count: pages?.length || 0,
-      task_id: taskId,
-      user_topic: userTopic.slice(0, 50),
-      user_images: userImages
-    });
+    logRequest('/generate', { task_id: taskId, pages_count: pages?.length || 0, record_id: recordId });
 
-    if (!pages) {
-      logger.warn('图片生成请求缺少 pages 参数');
+    if ((!taskId && !recordId) || !pages) {
+      logger.warn('生成图片请求缺少必要参数');
       return res.status(400).json({
         success: false,
-        error: '参数错误：pages 不能为空。\n请提供要生成的页面列表数据。'
+        error: '参数错误：必须提供 task_id 或 record_id，且 pages 不能为空。'
       });
     }
 
-    // 查找对应的历史记录并更新 task_id
-    let recordId: string | null = null;
-    if (taskId) {
-      try {
-        const historyService = getHistoryService();
-        const index = historyService['_loadIndex']();
-        
-        // 查找包含此 task_id 的记录
-        for (const rec of index.records) {
-          const recordDetail = historyService.getRecord(rec.id);
-          if (recordDetail && recordDetail.images?.task_id === taskId) {
-            recordId = rec.id;
-            break;
-          }
-        }
-
-        // 如果找到了记录,更新其 task_id 和状态
-        if (recordId) {
-          historyService.updateRecord(recordId, {
-            images: {
-              task_id: taskId,
-              generated: []
-            },
-            status: 'generating'
-          });
-          logger.info(`✅ 已关联历史记录: record_id=${recordId}, task_id=${taskId}`);
-        }
-      } catch (error: any) {
-        logger.error(`查找/更新历史记录失败: ${error.message}`);
+    // 如果没有 task_id 但有 record_id，尝试从历史记录查找
+    if (!taskId && recordId) {
+      const historyService = getHistoryService();
+      const record = historyService.getRecord(recordId);
+      if (record && record.images && record.images.task_id) {
+        taskId = record.images.task_id;
+        logger.info(`从记录 ${recordId} 找到关联任务 ID: ${taskId}`);
       }
     }
 
-    // 获取图片生成服务
-    logger.info(`🖼️  开始图片生成任务: ${taskId}, 共 ${pages.length} 页`);
+    logger.info(`🎨 开始生成图片任务: ${taskId || 'New Task'}, 共 ${pages.length} 页`);
     const imageService = getImageService();
 
     // 设置 SSE 响应头
@@ -204,15 +156,9 @@ router.post('/generate', async (req: Request, res: Response) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Connection', 'keep-alive');
 
-    // SSE 生成器,传入 recordId 用于实时更新历史记录
-    const generator = imageService.generateImages(
-      pages,
-      taskId,
-      fullOutline,
-      userImages,
-      userTopic,
-      recordId // 传递 recordId 给 ImageService
-    );
+    // SSE 生成器，传入 recordId
+    // 注意：imageService.generateImages 会处理 taskId 为空的情况（创建新任务）
+    const generator = imageService.generateImages(pages, taskId, undefined, undefined, undefined, recordId);
 
     for await (const event of generator) {
       const eventType = event.event;
@@ -231,141 +177,14 @@ router.post('/generate', async (req: Request, res: Response) => {
     if (!res.headersSent) {
       return res.status(500).json({
         success: false,
-        error: `图片生成异常。\n错误详情: ${error.message}\n建议：检查图片生成服务配置和后端日志`
+        error: `生成图片任务启动失败。\n错误详情: ${error.message}`
       });
     }
   }
 });
 
 /**
- * 获取图片（支持缩略图）
- */
-router.get('/images/:taskId/:filename', (req: Request, res: Response) => {
-  try {
-    const { taskId, filename } = req.params;
-    logger.debug(`获取图片: ${taskId}/${filename}`);
-    
-    // 检查是否请求缩略图
-    const thumbnail = req.query.thumbnail !== 'false';
-
-    // 直接构建路径
-    const historyRoot = path.join(process.cwd(), 'history');
-
-    if (thumbnail) {
-      // 尝试返回缩略图
-      const thumbFilename = `thumb_${filename}`;
-      const thumbFilepath = path.join(historyRoot, taskId, thumbFilename);
-
-      // 如果缩略图存在，返回缩略图
-      if (fs.existsSync(thumbFilepath)) {
-        return res.sendFile(thumbFilepath);
-      }
-    }
-
-    // 返回原图
-    const filepath = path.join(historyRoot, taskId, filename);
-
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).json({
-        success: false,
-        error: `图片不存在：${taskId}/${filename}`
-      });
-    }
-
-    return res.sendFile(filepath);
-
-  } catch (error: any) {
-    logError('/images', error);
-    return res.status(500).json({
-      success: false,
-      error: `获取图片失败: ${error.message}`
-    });
-  }
-});
-
-/**
- * 重试生成单张图片 - SSE 流式响应
- */
-router.post('/retry', async (req: Request, res: Response) => {
-  try {
-    const data = req.body;
-    const taskId = data.task_id;
-    const page = data.page;
-    const useReference = data.use_reference !== false;
-
-    logRequest('/retry', { task_id: taskId, page_index: page?.index });
-
-    if (!taskId || !page) {
-      logger.warn('重试请求缺少必要参数');
-      return res.status(400).json({
-        success: false,
-        error: '参数错误：task_id 和 page 不能为空。\n请提供任务ID和页面信息。'
-      });
-    }
-
-    // 查找对应的历史记录
-    let recordId: string | null = null;
-    if (taskId) {
-      try {
-        const historyService = getHistoryService();
-        const index = historyService['_loadIndex']();
-        
-        for (const rec of index.records) {
-          const recordDetail = historyService.getRecord(rec.id);
-          if (recordDetail && recordDetail.images?.task_id === taskId) {
-            recordId = rec.id;
-            break;
-          }
-        }
-      } catch (error: any) {
-        logger.error(`查找历史记录失败: ${error.message}`);
-      }
-    }
-
-    logger.info(`🔄 重试生成图片: task=${taskId}, page=${page.index}`);
-    const imageService = getImageService();
-
-    // 设置 SSE 响应头
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.setHeader('Connection', 'keep-alive');
-
-    // SSE 生成器,传入 recordId
-    const generator = imageService.retrySingleImageStreaming(
-      taskId,
-      page,
-      useReference,
-      undefined,
-      undefined,
-      recordId
-    );
-
-    for await (const event of generator) {
-      const eventType = event.event;
-      const eventData = event.data;
-
-      // 格式化为 SSE 格式
-      res.write(`event: ${eventType}\n`);
-      res.write(`data: ${JSON.stringify(eventData)}\n\n`);
-    }
-
-    res.end();
-
-  } catch (error: any) {
-    logError('/retry', error);
-    // SSE已经开始，不能返回JSON
-    if (!res.headersSent) {
-      return res.status(500).json({
-        success: false,
-        error: `重试图片生成失败。\n错误详情: ${error.message}`
-      });
-    }
-  }
-});
-
-/**
- * 批量重试失败的图片（SSE 流式返回）
+ * 批量重试失败的图片 - SSE 流式响应
  */
 router.post('/retry-failed', async (req: Request, res: Response) => {
   try {
@@ -468,7 +287,7 @@ router.post('/regenerate', async (req: Request, res: Response) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.setHeader('Connection', 'keep-alive');
 
-    // SSE 生成器,传入 recordId
+    // SSE 生成器，传入 recordId
     const generator = imageService.retrySingleImageStreaming(
       taskId,
       page,
@@ -893,16 +712,6 @@ router.get('/history/:recordId/download', (req: Request, res: Response) => {
   }
 });
 
-// ==================== 配置管理 API ====================
-
-/**
- * 遮盖 API Key，只显示前4位和后4位
- */
-function maskApiKey(key: string): string {
-  if (!key) return '';
-  if (key.length <= 8) return '*'.repeat(key.length);
-  return key.slice(0, 4) + '*'.repeat(key.length - 8) + key.slice(-4);
-}
 
 /**
  * 准备返回给前端的 providers，返回脱敏的 api_key
@@ -922,6 +731,15 @@ function prepareProvidersForResponse(providers: any): any {
     result[name] = providerCopy;
   }
   return result;
+}
+
+/**
+ * 掩盖 API Key
+ */
+function maskApiKey(apiKey: string): string {
+  if (!apiKey) return '';
+  if (apiKey.length <= 8) return '********';
+  return apiKey.substring(0, 4) + '****' + apiKey.substring(apiKey.length - 4);
 }
 
 /**

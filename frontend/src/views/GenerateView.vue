@@ -4,30 +4,48 @@
       <div>
         <h1 class="page-title">生成结果</h1>
         <p class="page-subtitle">
-          <span v-if="isGenerating">正在生成第 {{ store.progress.current + 1 }} / {{ store.progress.total }} 页</span>
-          <span v-else-if="hasFailedImages">{{ failedCount }} 张图片生成失败，可点击重试</span>
+          <span v-if="isGenerating"
+            >正在生成第 {{ store.progress.current + 1 }} /
+            {{ store.progress.total }} 页</span
+          >
+          <span v-else-if="hasFailedImages"
+            >{{ failedCount }} 张图片生成失败，可点击重试</span
+          >
           <span v-else>全部 {{ store.progress.total }} 张图片生成完成</span>
         </p>
       </div>
-      <div style="display: flex; gap: 10px;">
+      <div style="display: flex; gap: 10px">
         <button
           v-if="hasFailedImages && !isGenerating"
           class="btn btn-primary"
           @click="retryAllFailed"
           :disabled="isRetrying"
         >
-          {{ isRetrying ? '补全中...' : '一键补全失败图片' }}
+          {{ isRetrying ? "补全中..." : "一键补全失败图片" }}
         </button>
-        <button class="btn" @click="router.push('/outline')" style="border:1px solid var(--border-color)">
+        <button
+          class="btn"
+          @click="router.push('/outline')"
+          style="border: 1px solid var(--border-color)"
+        >
           返回大纲
         </button>
       </div>
     </div>
 
     <div class="card">
-      <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-weight: 600;">生成进度</span>
-        <span style="color: var(--primary); font-weight: 600;">{{ Math.round(progressPercent) }}%</span>
+      <div
+        style="
+          margin-bottom: 20px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        "
+      >
+        <span style="font-weight: 600">生成进度</span>
+        <span style="color: var(--primary); font-weight: 600"
+          >{{ Math.round(progressPercent) }}%</span
+        >
       </div>
       <div class="progress-container">
         <div class="progress-bar" :style="{ width: progressPercent + '%' }" />
@@ -37,10 +55,17 @@
         {{ error }}
       </div>
 
-      <div class="grid-cols-4" style="margin-top: 40px;">
-        <div v-for="image in store.images" :key="image.index" class="image-card">
+      <div class="grid-cols-4" style="margin-top: 40px">
+        <div
+          v-for="image in store.images"
+          :key="image.index"
+          class="image-card"
+        >
           <!-- 图片展示区域 -->
-          <div v-if="image.url && image.status === 'done'" class="image-preview">
+          <div
+            v-if="image.url && image.status === 'done'"
+            class="image-preview"
+          >
             <img :src="image.url" :alt="`第 ${image.index + 1} 页`" />
             <!-- 重新生成按钮（悬停显示） -->
             <div class="image-overlay">
@@ -49,7 +74,14 @@
                 @click="regenerateImage(image.index)"
                 :disabled="image.status === 'retrying'"
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
                   <path d="M23 4v6h-6"></path>
                   <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
                 </svg>
@@ -59,13 +91,23 @@
           </div>
 
           <!-- 生成中/重试中状态 -->
-          <div v-else-if="image.status === 'generating' || image.status === 'retrying'" class="image-placeholder">
+          <div
+            v-else-if="
+              image.status === 'generating' || image.status === 'retrying'
+            "
+            class="image-placeholder"
+          >
             <div class="spinner"></div>
-            <div class="status-text">{{ image.status === 'retrying' ? '重试中...' : '生成中...' }}</div>
+            <div class="status-text">
+              {{ image.status === "retrying" ? "重试中..." : "生成中..." }}
+            </div>
           </div>
 
           <!-- 失败状态 -->
-          <div v-else-if="image.status === 'error'" class="image-placeholder error-placeholder">
+          <div
+            v-else-if="image.status === 'error'"
+            class="image-placeholder error-placeholder"
+          >
             <div class="error-icon">!</div>
             <div class="status-text">生成失败</div>
             <button
@@ -96,53 +138,64 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { useGeneratorStore } from '../stores/generator'
-import { generateImagesPost, regenerateImage as apiRegenerateImage, retryFailedImages as apiRetryFailed, createHistory, updateHistory, getImageUrl } from '../api'
+import { ref, computed, onMounted } from "vue";
+import { useRouter } from "vue-router";
+import { useGeneratorStore } from "../stores/generator";
+import {
+  generateImagesPost,
+  regenerateImage as apiRegenerateImage,
+  retryFailedImages as apiRetryFailed,
+  createHistory,
+  updateHistory,
+  getImageUrl,
+} from "../api";
 
-const router = useRouter()
-const store = useGeneratorStore()
+const router = useRouter();
+const store = useGeneratorStore();
 
-const error = ref('')
-const isRetrying = ref(false)
+const error = ref("");
+const isRetrying = ref(false);
 
-const isGenerating = computed(() => store.progress.status === 'generating')
+const isGenerating = computed(() => store.progress.status === "generating");
 
 const progressPercent = computed(() => {
-  if (store.progress.total === 0) return 0
-  return (store.progress.current / store.progress.total) * 100
-})
+  if (store.progress.total === 0) return 0;
+  return (store.progress.current / store.progress.total) * 100;
+});
 
-const hasFailedImages = computed(() => store.images.some(img => img.status === 'error'))
+const hasFailedImages = computed(() =>
+  store.images.some((img) => img.status === "error")
+);
 
-const failedCount = computed(() => store.images.filter(img => img.status === 'error').length)
+const failedCount = computed(
+  () => store.images.filter((img) => img.status === "error").length
+);
 
 const getStatusText = (status: string) => {
   const texts: Record<string, string> = {
-    generating: '生成中',
-    done: '已完成',
-    error: '失败',
-    retrying: '重试中'
-  }
-  return texts[status] || '等待中'
-}
+    generating: "生成中",
+    done: "已完成",
+    error: "失败",
+    retrying: "重试中",
+  };
+  return texts[status] || "等待中";
+};
 
 // 重试单张图片（流式响应，异步执行）
 function retrySingleImage(index: number) {
-  if (!store.taskId) return
+  if (!store.taskId) return;
 
-  const page = store.outline.pages.find(p => p.index === index)
-  if (!page) return
+  const page = store.outline.pages.find((p) => p.index === index);
+  if (!page) return;
 
   // 立即设置为重试状态
-  store.setImageRetrying(index)
+  store.setImageRetrying(index);
 
   // 构建上下文信息
   const context = {
-    fullOutline: store.outline.raw || '',
-    userTopic: store.topic || ''
-  }
+    fullOutline: store.outline.raw || "",
+    userTopic: store.topic || "",
+  };
 
   // 使用流式 API
   apiRegenerateImage(
@@ -155,44 +208,44 @@ function retrySingleImage(index: number) {
     // onComplete
     (event) => {
       if (event.image_url) {
-        store.updateImage(index, event.image_url)
+        store.updateImage(index, event.image_url);
       }
     },
     // onError
     (event) => {
-      store.updateProgress(index, 'error', undefined, event.message)
+      store.updateProgress(index, "error", undefined, event.message);
     },
     // onFinish
     (result) => {
       if (!result.success && result.error) {
-        store.updateProgress(index, 'error', undefined, result.error)
+        store.updateProgress(index, "error", undefined, result.error);
       }
     },
     // onStreamError
     (err) => {
-      store.updateProgress(index, 'error', undefined, err.message)
+      store.updateProgress(index, "error", undefined, err.message);
     }
-  )
+  );
 }
 
 // 重新生成图片（成功的也可以重新生成，立即返回不等待）
 function regenerateImage(index: number) {
-  retrySingleImage(index)
+  retrySingleImage(index);
 }
 
 // 批量重试所有失败的图片
 async function retryAllFailed() {
-  if (!store.taskId) return
+  if (!store.taskId) return;
 
-  const failedPages = store.getFailedPages()
-  if (failedPages.length === 0) return
+  const failedPages = store.getFailedPages();
+  if (failedPages.length === 0) return;
 
-  isRetrying.value = true
+  isRetrying.value = true;
 
   // 设置所有失败的图片为重试状态
-  failedPages.forEach(page => {
-    store.setImageRetrying(page.index)
-  })
+  failedPages.forEach((page) => {
+    store.setImageRetrying(page.index);
+  });
 
   try {
     await apiRetryFailed(
@@ -203,34 +256,34 @@ async function retryAllFailed() {
       // onComplete
       (event) => {
         if (event.image_url) {
-          store.updateImage(event.index, event.image_url)
+          store.updateImage(event.index, event.image_url);
         }
       },
       // onError
       (event) => {
-        store.updateProgress(event.index, 'error', undefined, event.message)
+        store.updateProgress(event.index, "error", undefined, event.message);
       },
       // onFinish
       () => {
-        isRetrying.value = false
+        isRetrying.value = false;
       },
       // onStreamError
       (err) => {
-        console.error('重试失败:', err)
-        isRetrying.value = false
-        error.value = '重试失败: ' + err.message
+        console.error("重试失败:", err);
+        isRetrying.value = false;
+        error.value = "重试失败: " + err.message;
       }
-    )
+    );
   } catch (e) {
-    isRetrying.value = false
-    error.value = '重试失败: ' + String(e)
+    isRetrying.value = false;
+    error.value = "重试失败: " + String(e);
   }
 }
 
 onMounted(async () => {
   if (store.outline.pages.length === 0) {
-    router.push('/')
-    return
+    router.push("/");
+    return;
   }
 
   // 创建历史记录（如果还没有）
@@ -238,85 +291,86 @@ onMounted(async () => {
     try {
       const result = await createHistory(store.topic, {
         raw: store.outline.raw,
-        pages: store.outline.pages
-      })
+        pages: store.outline.pages,
+      });
       if (result.success && result.record_id) {
-        store.recordId = result.record_id
-        console.log('创建历史记录:', store.recordId)
+        store.recordId = result.record_id;
+        console.log("创建历史记录:", store.recordId);
       }
     } catch (e) {
-      console.error('创建历史记录失败:', e)
+      console.error("创建历史记录失败:", e);
     }
   }
 
-  store.startGeneration()
+  store.startGeneration();
 
   generateImagesPost(
     store.outline.pages,
     null,
-    store.outline.raw,  // 传入完整大纲文本
+    store.outline.raw, // 传入完整大纲文本
     // onProgress
     (event) => {
-      console.log('Progress:', event)
+      console.log("Progress:", event);
     },
     // onComplete
     (event) => {
-      console.log('Complete:', event)
+      console.log("Complete:", event);
       if (event.image_url) {
-        store.updateProgress(event.index, 'done', event.image_url)
+        store.updateProgress(event.index, "done", event.image_url);
       }
     },
     // onError
     (event) => {
-      console.error('Error:', event)
-      store.updateProgress(event.index, 'error', undefined, event.message)
+      console.error("Error:", event);
+      store.updateProgress(event.index, "error", undefined, event.message);
     },
     // onFinish
     async (event) => {
-      console.log('Finish:', event)
-      store.finishGeneration(event.task_id)
+      console.log("Finish:", event);
+      store.finishGeneration(event.task_id);
 
       // 注意: 后端现在会在 SSE 完成后自动更新历史记录
       // 前端保留这段代码作为备用,以防后端更新失败
       if (store.recordId) {
         try {
           // 收集所有生成的图片文件名
-          const generatedImages = event.images.filter(img => img !== null)
+          const generatedImages = event.images.filter((img) => img !== null);
 
           // 确定状态
-          let status = 'completed'
+          let status = "completed";
           if (hasFailedImages.value) {
-            status = generatedImages.length > 0 ? 'partial' : 'draft'
+            status = generatedImages.length > 0 ? "partial" : "draft";
           }
 
           // 获取封面图作为缩略图（只保存文件名，不是完整URL）
-          const thumbnail = generatedImages.length > 0 ? generatedImages[0] : null
+          const thumbnail =
+            generatedImages.length > 0 ? generatedImages[0] : null;
 
           await updateHistory(store.recordId, {
             images: {
               task_id: event.task_id,
-              generated: generatedImages
+              generated: generatedImages,
             },
             status: status,
-            thumbnail: thumbnail
-          })
-          console.log('历史记录已更新(前端)')
+            thumbnail: thumbnail || undefined,
+          });
+          console.log("历史记录已更新(前端)");
         } catch (e) {
-          console.error('更新历史记录失败:', e)
+          console.error("更新历史记录失败:", e);
         }
       }
 
       // 如果没有失败的，跳转到结果页
       if (!hasFailedImages.value) {
         setTimeout(() => {
-          router.push('/result')
-        }, 1000)
+          router.push("/result");
+        }, 1000);
       }
     },
     // onStreamError
     (err) => {
-      console.error('Stream Error:', err)
-      error.value = '生成失败: ' + err.message
+      console.error("Stream Error:", err);
+      error.value = "生成失败: " + err.message;
     },
     // userImages - 用户上传的参考图片
     store.userImages.length > 0 ? store.userImages : undefined,
@@ -324,8 +378,8 @@ onMounted(async () => {
     store.topic,
     // recordId - 历史记录ID,传递给后端用于自动更新
     store.recordId
-  )
-})
+  );
+});
 </script>
 
 <style scoped>
@@ -461,19 +515,19 @@ onMounted(async () => {
 }
 
 .status-badge.done {
-  background: #E6F7ED;
-  color: #52C41A;
+  background: #e6f7ed;
+  color: #52c41a;
 }
 
 .status-badge.generating,
 .status-badge.retrying {
-  background: #E6F4FF;
-  color: #1890FF;
+  background: #e6f4ff;
+  color: #1890ff;
 }
 
 .status-badge.error {
-  background: #FFF1F0;
-  color: #FF4D4F;
+  background: #fff1f0;
+  color: #ff4d4f;
 }
 
 .spinner {

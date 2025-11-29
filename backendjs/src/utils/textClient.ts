@@ -119,7 +119,7 @@ export class TextChatClient {
         // 压缩图片到 200KB 以内
         const compressedImg = await compressImage(img, 200);
         const base64Data = this.encodeImageToBase64(compressedImg);
-        imageUrl = `data:image/png;base64,${base64Data}`;
+        imageUrl = `data:image/jpeg;base64,${base64Data}`;
       } else {
         // 已经是 URL
         imageUrl = img;

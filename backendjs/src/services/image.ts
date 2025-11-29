@@ -294,6 +294,25 @@ export class ImageService {
     // 引入历史服务用于实时更新
     const historyService = recordId ? (await import('./history')).getHistoryService() : null;
 
+    // 立即保存 task_id 和状态
+    if (historyService && recordId) {
+      try {
+        const record = historyService.getRecord(recordId);
+        const currentImages = record?.images || { task_id: null, generated: [] };
+        
+        historyService.updateRecord(recordId, {
+          status: 'generating',
+          images: {
+            ...currentImages,
+            task_id: taskId
+          }
+        });
+        logger.info(`已关联任务 ID 到记录: ${recordId} -> ${taskId}`);
+      } catch (error: any) {
+        logger.error(`关联任务 ID 失败: ${error.message}`);
+      }
+    }
+
     // ==================== 第一阶段：生成封面 ====================
     let coverPage: PageData | null = null;
     const otherPages: PageData[] = [];
@@ -350,11 +369,17 @@ export class ImageService {
         // 实时更新历史记录:第一张图片生成后更新 thumbnail
         if (historyService && recordId) {
           try {
+            const record = historyService.getRecord(recordId);
+            const currentImages = record?.images || { task_id: taskId, generated: [] };
+            const newGenerated = [...(currentImages.generated || [])];
+            newGenerated[index] = filename;
+
             historyService.updateRecord(recordId, {
               thumbnail: filename,
               images: {
+                ...currentImages,
                 task_id: taskId,
-                generated: [filename]
+                generated: newGenerated
               }
             });
             logger.debug(`✅ 已更新封面缩略图: thumbnail=${filename}`);
@@ -379,7 +404,7 @@ export class ImageService {
         yield {
           event: 'error',
           data: {
-            index,
+            index: coverPage.index,
             status: 'error',
             message: error || '未知错误',
             retryable: true,
@@ -697,9 +722,6 @@ export class ImageService {
     }
   }
 
-  /**
-   * 重试生成单张图片（流式，支持 SSE）
-   */
   async *retrySingleImageStreaming(
     taskId: string,
     page: PageData,
